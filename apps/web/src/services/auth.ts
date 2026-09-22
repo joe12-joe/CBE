@@ -121,12 +121,12 @@ async function sbSetUserActive(id: string, active: boolean): Promise<User> {
 
 // --- Mock fallback -----------------------------------------------------------
 
-/** Mock login — accepts any seeded user email with any password. */
+/** Mock login — only accepts users present in the mock DB (none by default). */
 export async function login(email: string, password: string): Promise<Session> {
   if (supabaseEnabled()) return sbLogin(email, password);
   await delay(600);
   const user = users.find((u) => u.email.toLowerCase() === email.trim().toLowerCase());
-  if (!user) throw new ApiError(401, "Unknown user. Use one of the demo accounts below.");
+  if (!user) throw new ApiError(401, "Unknown user or wrong password.");
   if (!user.active) throw new ApiError(403, "This account has been deactivated.");
   return { user, token: `mock-token-${user.id}` };
 }

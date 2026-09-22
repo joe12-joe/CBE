@@ -99,62 +99,12 @@ export const schoolBySubCounty: Record<string, string[]> = {
 /* Users                                                               */
 /* ------------------------------------------------------------------ */
 
-export const users: User[] = [
-  {
-    id: "usr-1",
-    name: "Grace Wafula",
-    email: "superadmin@cbe.go.ke",
-    role: "SUPER_ADMIN",
-    schoolIds: schools.map((s) => s.id),
-    countyIds: counties.map((c) => c.id),
-    active: true,
-  },
-  {
-    id: "usr-2",
-    name: "Peter Otieno",
-    email: "county@nairobi.cbe.go.ke",
-    role: "COUNTY_ADMIN",
-    schoolIds: ["sch-1", "sch-3"],
-    countyIds: ["ct-nairobi"],
-    active: true,
-  },
-  {
-    id: "usr-3",
-    name: "Jane Mwangi",
-    email: "subcounty@kasarani.cbe.go.ke",
-    role: "SUB_COUNTY_ADMIN",
-    schoolIds: ["sch-3"],
-    countyIds: ["ct-nairobi"],
-    active: true,
-  },
-  {
-    id: "usr-4",
-    name: "Joseph Kiptoo",
-    email: "admin@langataestate.ac.ke",
-    role: "SCHOOL_ADMIN",
-    schoolIds: ["sch-1"],
-    countyIds: ["ct-nairobi"],
-    active: true,
-  },
-  {
-    id: "usr-5",
-    name: "Mary Wanjiku",
-    email: "teacher@langataestate.ac.ke",
-    role: "TEACHER",
-    schoolIds: ["sch-1"],
-    countyIds: ["ct-nairobi"],
-    active: true,
-  },
-  {
-    id: "usr-6",
-    name: "David Maina",
-    email: "teacher2@ruirujs.ac.ke",
-    role: "TEACHER",
-    schoolIds: ["sch-2"],
-    countyIds: ["ct-kiambu"],
-    active: true,
-  },
-];
+/**
+ * No demo accounts, by design. In mock (offline) mode the user pool starts
+ * empty — append local-only entries here if needed for UI development.
+ * Real accounts live in Supabase Auth + public.profiles.
+ */
+export const users: User[] = [];
 
 /* ------------------------------------------------------------------ */
 /* Classes & learners                                                  */

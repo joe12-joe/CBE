@@ -69,7 +69,7 @@ export function LoginPage() {
         </div>
 
         <p className="text-xs text-white/60">
-          Starter build running on demo data · Curriculum framework data to be verified against KICD.
+          Starter build · Curriculum framework data to be verified against KICD.
         </p>
       </div>
 
