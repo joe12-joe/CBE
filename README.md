@@ -43,6 +43,9 @@ Production build: `npm run build` (outputs to `dist/`), preview with `npm run pr
   No demo accounts are created — add your own under Supabase Authentication and grant a role
   with the profile snippet the script prints (or the `create-user` edge function).
 
+  **Fastest manual path:** paste `supabase/init.sql` (schema + seed combined) into the
+  dashboard **SQL Editor** and run it — done there.
+
 ## What works today
 
 - Role-aware shell, routing guards, term & school switcher

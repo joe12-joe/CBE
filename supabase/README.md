@@ -20,6 +20,7 @@ offline.
 | --- | --- |
 | `schema.sql` | All tables, indexes, RLS helper functions and policies. |
 | `seed.sql`   | Starter geography, schools, classes, curriculum, learners, scores, comments. |
+| `init.sql`   | Generated snapshot: `schema.sql` + `seed.sql` — one paste for the SQL Editor. |
 | `functions/create-user/index.ts` | Edge function that creates Auth users + profiles. |
 | `../apps/web/scripts/setup-supabase.mjs` | One-shot setup: applies schema (and seed). |
 
