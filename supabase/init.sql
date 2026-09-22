@@ -1,8 +1,9 @@
 -- ============================================================================
 -- CBE Manager — full setup (generated: schema.sql + seed.sql)
 -- One paste in the Supabase SQL Editor applies everything.
+-- This file is idempotent: re-running it clears starter data and recreates it,
+-- leaving rows in public.profiles untouched.
 -- ============================================================================
-
 -- ============================================================================
 -- CBE Manager — Supabase schema (PostgreSQL)
 -- Apply in the Supabase SQL editor (or `supabase db push` / psql).
@@ -16,13 +17,13 @@ create extension if not exists "pgcrypto";
 -- ---------------------------------------------------------------------------
 -- Reference: geography
 -- ---------------------------------------------------------------------------
-create table public.counties (
+create table if not exists public.counties (
   id   uuid primary key default gen_random_uuid(),
   code text not null unique,
   name text not null
 );
 
-create table public.sub_counties (
+create table if not exists public.sub_counties (
   id        uuid primary key default gen_random_uuid(),
   county_id uuid not null references public.counties(id) on delete cascade,
   name      text not null
@@ -31,7 +32,7 @@ create table public.sub_counties (
 -- ---------------------------------------------------------------------------
 -- Schools
 -- ---------------------------------------------------------------------------
-create table public.schools (
+create table if not exists public.schools (
   id           uuid primary key default gen_random_uuid(),
   code         text not null unique,            -- NEMIS-style code
   name         text not null,
@@ -46,7 +47,7 @@ create table public.schools (
 -- Users (profiles): one row per Supabase Auth user.
 -- school_ids / county_ids keep role scoping simple and RLS-friendly.
 -- ---------------------------------------------------------------------------
-create table public.profiles (
+create table if not exists public.profiles (
   id         uuid primary key references auth.users(id) on delete cascade,
   name       text not null default '',
   email      text not null unique,
@@ -61,7 +62,7 @@ create table public.profiles (
 -- ---------------------------------------------------------------------------
 -- Classes & learners
 -- ---------------------------------------------------------------------------
-create table public.classes (
+create table if not exists public.classes (
   id         uuid primary key default gen_random_uuid(),
   school_id  uuid not null references public.schools(id) on delete cascade,
   grade      text not null check (grade in ('PP1','PP2','G1','G2','G3','G4','G5','G6','G7','G8','G9')),
@@ -69,7 +70,7 @@ create table public.classes (
   teacher_id uuid references public.profiles(id) on delete set null
 );
 
-create table public.learners (
+create table if not exists public.learners (
   id             uuid primary key default gen_random_uuid(),
   upi            text not null unique,           -- Unique Personal Identifier
   nemis          text,
@@ -85,7 +86,7 @@ create table public.learners (
   admission_year int not null
 );
 
-create table public.enrollments (
+create table if not exists public.enrollments (
   id         uuid primary key default gen_random_uuid(),
   learner_id uuid not null references public.learners(id) on delete cascade,
   class_id   uuid not null references public.classes(id) on delete cascade,
@@ -98,32 +99,32 @@ create table public.enrollments (
 -- ---------------------------------------------------------------------------
 -- Curriculum: learning areas → strands → sub-strands (per grade)
 -- ---------------------------------------------------------------------------
-create table public.learning_areas (
+create table if not exists public.learning_areas (
   id   uuid primary key default gen_random_uuid(),
   code text not null unique,
   name text not null
 );
 
-create table public.learning_area_grades (
+create table if not exists public.learning_area_grades (
   learning_area_id uuid not null references public.learning_areas(id) on delete cascade,
   grade            text not null,
   primary key (learning_area_id, grade)
 );
 
-create table public.strands (
+create table if not exists public.strands (
   id               uuid primary key default gen_random_uuid(),
   code             text not null,
   name             text not null,
   learning_area_id uuid not null references public.learning_areas(id) on delete cascade
 );
 
-create table public.strand_grades (
+create table if not exists public.strand_grades (
   strand_id uuid not null references public.strands(id) on delete cascade,
   grade     text not null,
   primary key (strand_id, grade)
 );
 
-create table public.sub_strands (
+create table if not exists public.sub_strands (
   id        uuid primary key default gen_random_uuid(),
   code      text not null,
   name      text not null,
@@ -134,7 +135,7 @@ create table public.sub_strands (
 -- ---------------------------------------------------------------------------
 -- Assessment results (0–10 per learner per sub-strand per term)
 -- ---------------------------------------------------------------------------
-create table public.scores (
+create table if not exists public.scores (
   id            uuid primary key default gen_random_uuid(),
   learner_id    uuid not null references public.learners(id) on delete cascade,
   sub_strand_id uuid not null references public.sub_strands(id) on delete cascade,
@@ -145,7 +146,7 @@ create table public.scores (
   unique (learner_id, sub_strand_id, year, term)
 );
 
-create table public.comments (
+create table if not exists public.comments (
   id              uuid primary key default gen_random_uuid(),
   learner_id      uuid not null references public.learners(id) on delete cascade,
   year            int  not null,
@@ -229,72 +230,99 @@ alter table public.scores              enable row level security;
 alter table public.comments            enable row level security;
 
 -- Geography & curriculum: any signed-in user may read.
+drop policy if exists geo_read on public.counties;
 create policy geo_read  on public.counties      for select to authenticated using (true);
+drop policy if exists geo_sub_read on public.sub_counties;
 create policy geo_sub_read on public.sub_counties for select to authenticated using (true);
+drop policy if exists la_read on public.learning_areas;
 create policy la_read   on public.learning_areas for select to authenticated using (true);
+drop policy if exists la_g_read on public.learning_area_grades;
 create policy la_g_read on public.learning_area_grades for select to authenticated using (true);
+drop policy if exists strand_read on public.strands;
 create policy strand_read on public.strands     for select to authenticated using (true);
+drop policy if exists sg_read on public.strand_grades;
 create policy sg_read   on public.strand_grades for select to authenticated using (true);
+drop policy if exists sub_read on public.sub_strands;
 create policy sub_read  on public.sub_strands   for select to authenticated using (true);
 
 -- Curriculum & geography writes: super admin only.
+drop policy if exists geo_write on public.counties;
 create policy geo_write on public.counties  for all to public using (public.app_role() = 'SUPER_ADMIN') with check (public.app_role() = 'SUPER_ADMIN');
+drop policy if exists geo_sub_write on public.sub_counties;
 create policy geo_sub_write on public.sub_counties for all to public using (public.app_role() = 'SUPER_ADMIN') with check (public.app_role() = 'SUPER_ADMIN');
+drop policy if exists la_write on public.learning_areas;
 create policy la_write  on public.learning_areas for all to public using (public.app_role() = 'SUPER_ADMIN') with check (public.app_role() = 'SUPER_ADMIN');
+drop policy if exists la_g_write on public.learning_area_grades;
 create policy la_g_write on public.learning_area_grades for all to public using (public.app_role() = 'SUPER_ADMIN') with check (public.app_role() = 'SUPER_ADMIN');
+drop policy if exists strand_write on public.strands;
 create policy strand_write on public.strands for all to public using (public.app_role() = 'SUPER_ADMIN') with check (public.app_role() = 'SUPER_ADMIN');
+drop policy if exists sg_write on public.strand_grades;
 create policy sg_write  on public.strand_grades for all to public using (public.app_role() = 'SUPER_ADMIN') with check (public.app_role() = 'SUPER_ADMIN');
+drop policy if exists sub_write on public.sub_strands;
 create policy sub_write on public.sub_strands for all to public using (public.app_role() = 'SUPER_ADMIN') with check (public.app_role() = 'SUPER_ADMIN');
 
 -- Schools: all signed-in users read; only super admin writes.
+drop policy if exists school_read on public.schools;
 create policy school_read on public.schools for select to authenticated using (true);
+drop policy if exists school_write on public.schools;
 create policy school_write on public.schools for all to public using (public.app_role() = 'SUPER_ADMIN') with check (public.app_role() = 'SUPER_ADMIN');
 
 -- Teachers can't manage schools by policy above.
 
 -- Classes: read if you can access the school; write roles are super/school admin (with access).
+drop policy if exists class_read on public.classes;
 create policy class_read on public.classes
   for select to authenticated using (public.can_access_school(school_id));
+drop policy if exists class_write on public.classes;
 create policy class_write on public.classes
   for all to public
   using (public.app_role() in ('SUPER_ADMIN','SCHOOL_ADMIN') and public.can_access_school(school_id))
   with check (public.app_role() in ('SUPER_ADMIN','SCHOOL_ADMIN') and public.can_access_school(school_id));
 
 -- Learners: read if you can access the school; write school admins/super admin.
+drop policy if exists learner_read on public.learners;
 create policy learner_read on public.learners
   for select to authenticated using (public.can_access_school(school_id));
+drop policy if exists learner_write on public.learners;
 create policy learner_write on public.learners
   for insert to authenticated with check (
     public.app_role() in ('SUPER_ADMIN','SCHOOL_ADMIN') and public.can_access_school(school_id)
   );
+drop policy if exists learner_update on public.learners;
 create policy learner_update on public.learners
   for update to authenticated using (public.can_access_school(school_id))
   with check (public.can_access_school(school_id));
+drop policy if exists learner_delete on public.learners;
 create policy learner_delete on public.learners
   for delete to authenticated using (public.app_role() in ('SUPER_ADMIN','SCHOOL_ADMIN') and public.can_access_school(school_id));
 
 -- Enrollments: tied to the learner's school.
+drop policy if exists enroll_read on public.enrollments;
 create policy enroll_read on public.enrollments
   for select to authenticated using (
     exists (select 1 from public.learners l where l.id = learner_id and public.can_access_school(l.school_id))
   );
+drop policy if exists enroll_insert on public.enrollments;
 create policy enroll_insert on public.enrollments
   for insert to authenticated with check (
     public.app_role() in ('SUPER_ADMIN','SCHOOL_ADMIN') and
     exists (select 1 from public.learners l where l.id = learner_id and public.can_access_school(l.school_id))
   );
+drop policy if exists enroll_update on public.enrollments;
 create policy enroll_update on public.enrollments
   for update to authenticated using (
     exists (select 1 from public.learners l where l.id = learner_id and public.can_access_school(l.school_id))
   ) with check (
     exists (select 1 from public.learners l where l.id = learner_id and public.can_access_school(l.school_id))
   );
+drop policy if exists enroll_delete on public.enrollments;
 create policy enroll_delete on public.enrollments
   for delete to authenticated using (
     exists (select 1 from public.learners l where l.id = learner_id and public.can_access_school(l.school_id))
   );
 
 -- Profiles: you may read your own, and admins may list scoped rows.
+drop policy if exists profile_self on public.profiles;
 create policy profile_self on public.profiles
   for select to authenticated using (
     id = auth.uid()
@@ -302,20 +330,24 @@ create policy profile_self on public.profiles
     or (public.app_school_ids() && school_ids)
     or (public.app_county_ids() && county_ids)
   );
+drop policy if exists profile_write on public.profiles;
 create policy profile_write on public.profiles
   for all to public using (public.app_role() = 'SUPER_ADMIN') with check (public.app_role() = 'SUPER_ADMIN');
 
 -- Scores: read with school access; write school admins (with access) or the learner's teacher.
+drop policy if exists score_read on public.scores;
 create policy score_read on public.scores
   for select to authenticated using (
     exists (select 1 from public.learners l where l.id = learner_id and public.can_access_school(l.school_id))
   );
+drop policy if exists score_write on public.scores;
 create policy score_write on public.scores
   for insert to authenticated with check (
     (public.app_role() in ('SUPER_ADMIN','SCHOOL_ADMIN')
       and exists (select 1 from public.learners l where l.id = learner_id and public.can_access_school(l.school_id)))
     or (public.app_role() = 'TEACHER' and public.teaches_learner(learner_id))
   );
+drop policy if exists score_update on public.scores;
 create policy score_update on public.scores
   for update to authenticated using (
     (public.app_role() in ('SUPER_ADMIN','SCHOOL_ADMIN')
@@ -326,6 +358,7 @@ create policy score_update on public.scores
       and exists (select 1 from public.learners l where l.id = learner_id and public.can_access_school(l.school_id)))
     or (public.app_role() = 'TEACHER' and public.teaches_learner(learner_id))
   );
+drop policy if exists score_delete on public.scores;
 create policy score_delete on public.scores
   for delete to authenticated using (
     (public.app_role() in ('SUPER_ADMIN','SCHOOL_ADMIN')
@@ -334,16 +367,19 @@ create policy score_delete on public.scores
   );
 
 -- Comments: same scoping as scores.
+drop policy if exists comment_read on public.comments;
 create policy comment_read on public.comments
   for select to authenticated using (
     exists (select 1 from public.learners l where l.id = learner_id and public.can_access_school(l.school_id))
   );
+drop policy if exists comment_write on public.comments;
 create policy comment_write on public.comments
   for insert to authenticated with check (
     (public.app_role() in ('SUPER_ADMIN','SCHOOL_ADMIN')
       and exists (select 1 from public.learners l where l.id = learner_id and public.can_access_school(l.school_id)))
     or (public.app_role() = 'TEACHER' and public.teaches_learner(learner_id))
   );
+drop policy if exists comment_update on public.comments;
 create policy comment_update on public.comments
   for update to authenticated using (
     (public.app_role() in ('SUPER_ADMIN','SCHOOL_ADMIN')
@@ -354,17 +390,27 @@ create policy comment_update on public.comments
       and exists (select 1 from public.learners l where l.id = learner_id and public.can_access_school(l.school_id)))
     or (public.app_role() = 'TEACHER' and public.teaches_learner(learner_id))
   );
+drop policy if exists comment_delete on public.comments;
 create policy comment_delete on public.comments
   for delete to authenticated using (
     (public.app_role() in ('SUPER_ADMIN','SCHOOL_ADMIN')
       and exists (select 1 from public.learners l where l.id = learner_id and public.can_access_school(l.school_id)))
     or (public.app_role() = 'TEACHER' and public.teaches_learner(learner_id))
   );
+
+-- Idempotent re-runs: clear starter data (profiles / user rows are NOT touched).
+truncate table
+  public.scores, public.comments, public.enrollments, public.learners, public.classes,
+  public.sub_strands, public.strand_grades, public.strands,
+  public.learning_area_grades, public.learning_areas,
+  public.schools, public.sub_counties, public.counties
+cascade;
+
 -- ============================================================================
 -- CBE Manager — demo data
--- Apply AFTER schema.sql. Demo *login accounts* (profiles + Auth users) are
--- created by supabase/scripts/setup-supabase.mjs — Auth users can only be
--- created through the Auth admin API, not raw SQL.
+-- Apply AFTER schema.sql (or just run the combined supabase/init.sql).
+-- No accounts are created by this seed — add users via the Supabase Dashboard
+-- and grant a role with the snippet in supabase/README.md.
 -- ============================================================================
 
 -- --- Geography --------------------------------------------------------------

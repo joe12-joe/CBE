@@ -1,8 +1,16 @@
+-- Idempotent re-runs: clear starter data (profiles / user rows are NOT touched).
+truncate table
+  public.scores, public.comments, public.enrollments, public.learners, public.classes,
+  public.sub_strands, public.strand_grades, public.strands,
+  public.learning_area_grades, public.learning_areas,
+  public.schools, public.sub_counties, public.counties
+cascade;
+
 -- ============================================================================
 -- CBE Manager — demo data
--- Apply AFTER schema.sql. Demo *login accounts* (profiles + Auth users) are
--- created by supabase/scripts/setup-supabase.mjs — Auth users can only be
--- created through the Auth admin API, not raw SQL.
+-- Apply AFTER schema.sql (or just run the combined supabase/init.sql).
+-- No accounts are created by this seed — add users via the Supabase Dashboard
+-- and grant a role with the snippet in supabase/README.md.
 -- ============================================================================
 
 -- --- Geography --------------------------------------------------------------
