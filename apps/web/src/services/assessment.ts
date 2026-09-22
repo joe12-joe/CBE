@@ -2,6 +2,7 @@ import { db } from "./mocks/db";
 import { delay, ApiError } from "./apiClient";
 import { computeLevel } from "@/lib/format";
 import { averageScore } from "@/lib/score";
+import { supabase, supabaseEnabled, supabaseError } from "@/lib/supabase";
 import type {
   CompetencyLevel,
   GradeCode,
@@ -19,11 +20,197 @@ export interface ScoreGridData {
   rows: ScoreGridRow[];
 }
 
-export async function getScoreGrid(
-  _term: Term,
+// --- Live (Supabase) implementation -----------------------------------------
+
+async function sbGetScoreGrid(
+  term: Term,
   classId: string,
   learningAreaId?: string
 ): Promise<ScoreGridData> {
+  const { data: cls, error: clsErr } = await supabase!
+    .from("classes")
+    .select("id, grade, stream")
+    .eq("id", classId)
+    .maybeSingle();
+  if (clsErr) throw supabaseError(clsErr, "Could not load the class.");
+  if (!cls) throw new ApiError(404, "Class not found.");
+
+  let q = supabase!
+    .from("sub_strands")
+    .select("id, strand_id, code, name, grade, strand:strands!inner(id, name, learning_area_id)")
+    .eq("grade", cls.grade);
+  if (learningAreaId) q = q.eq("strand.learning_area_id", learningAreaId);
+  q = q.order("name");
+  const { data: subs, error: subsErr } = await q;
+  if (subsErr) throw supabaseError(subsErr, "Could not load sub-strands.");
+
+  const { data: learners, error: lErr } = await supabase!
+    .from("learners")
+    .select("id, upi, first_name, middle_name, last_name")
+    .eq("class_id", classId)
+    .order("last_name")
+    .order("first_name");
+  if (lErr) throw supabaseError(lErr, "Could not load learners.");
+
+  const learnerIds = (learners ?? []).map((l) => String(l.id));
+  const subIds = (subs ?? []).map((s) => String(s.id));
+  const { data: scores, error: scErr } = await supabase!
+    .from("scores")
+    .select("learner_id, sub_strand_id, score")
+    .eq("year", term.year)
+    .eq("term", term.term)
+    .in("learner_id", learnerIds)
+    .in("sub_strand_id", subIds);
+  if (scErr) throw supabaseError(scErr, "Could not load scores.");
+
+  const scoreMap = new Map<string, number | null>();
+  for (const s of scores ?? []) {
+    if (s.score != null) scoreMap.set(`${s.learner_id}:${s.sub_strand_id}`, Number(s.score));
+  }
+
+  const gridSubs = (subs ?? []).map((s) => {
+    const strand = s.strand && Array.isArray(s.strand) ? s.strand[0] : s.strand;
+    return {
+      id: String(s.id),
+      strandId: String(s.strand_id),
+      code: String(s.code),
+      name: String(s.name),
+      grade: String(s.grade) as GradeCode,
+      strandName: String(strand?.name ?? ""),
+      learningAreaId: String(strand?.learning_area_id ?? ""),
+    };
+  });
+
+  const rows: ScoreGridRow[] = (learners ?? []).map((l) => {
+    const cells: Record<string, number | null> = {};
+    for (const sub of gridSubs) {
+      const v = scoreMap.get(`${l.id}:${sub.id}`);
+      cells[sub.id] = v ?? null;
+    }
+    return {
+      learner: {
+        id: String(l.id),
+        upi: String(l.upi),
+        firstName: String(l.first_name),
+        middleName: l.middle_name ? String(l.middle_name) : undefined,
+        lastName: String(l.last_name),
+      },
+      cells,
+    };
+  });
+
+  return { grade: cls.grade as GradeCode, stream: String(cls.stream), subStrands: gridSubs, rows };
+}
+
+async function sbSaveScores(term: Term, inputs: ScoreInput[]): Promise<void> {
+  for (const inp of inputs) {
+    const key = {
+      learner_id: inp.learnerId,
+      sub_strand_id: inp.subStrandId,
+      year: term.year,
+      term: term.term,
+    };
+    if (inp.score == null) {
+      const { error } = await supabase!.from("scores").delete().match(key);
+      if (error) throw supabaseError(error, "Could not clear the score.");
+    } else {
+      const { error } = await supabase!
+        .from("scores")
+        .upsert({ ...key, score: inp.score }, { onConflict: "learner_id,sub_strand_id,year,term" });
+      if (error) throw supabaseError(error, "Could not save scores.");
+    }
+  }
+}
+
+async function sbGetLearnerAssessment(learnerId: string, term: Term): Promise<LearnerAreaResult[]> {
+  const { data: learner, error: lErr } = await supabase!
+    .from("learners")
+    .select("class_id")
+    .eq("id", learnerId)
+    .maybeSingle();
+  if (lErr) throw supabaseError(lErr, "Could not load the learner.");
+  if (!learner) throw new ApiError(404, "Learner not found.");
+  if (!learner.class_id) return [];
+
+  const { data: cls, error: cErr } = await supabase!
+    .from("classes")
+    .select("grade")
+    .eq("id", learner.class_id)
+    .maybeSingle();
+  if (cErr) throw supabaseError(cErr, "Could not load the learner's class.");
+  if (!cls) return [];
+
+  const { data: areas, error: aErr } = await supabase!
+    .from("learning_areas")
+    .select("id, code, name, strands!inner(id, name, sub_strands!inner(id, name, grade))")
+    .eq("strands.sub_strands.grade", cls.grade)
+    .order("name");
+  if (aErr) throw supabaseError(aErr, "Could not load the curriculum.");
+
+  const subIds: string[] = [];
+  const areaRows = ((areas as Array<Record<string, unknown>> | null) ?? []).map((area) => {
+    const strands = ((area.strands as Array<Record<string, unknown>> | null) ?? []).map((st) => ({
+      id: String(st.id),
+      name: String(st.name),
+      subStrands: ((st.sub_strands as Array<Record<string, unknown>> | null) ?? []).map((s) => {
+        subIds.push(String(s.id));
+        return { id: String(s.id), name: String(s.name) };
+      }),
+    }));
+    return { id: String(area.id), code: String(area.code), name: String(area.name), strands };
+  });
+
+  const { data: scores, error: scErr } = await supabase!
+    .from("scores")
+    .select("sub_strand_id, score")
+    .eq("learner_id", learnerId)
+    .eq("year", term.year)
+    .eq("term", term.term)
+    .in("sub_strand_id", subIds);
+  if (scErr) throw supabaseError(scErr, "Could not load scores.");
+  const scoreMap = new Map((scores ?? []).map((s) => [String(s.sub_strand_id), Number(s.score)]));
+
+  const results: LearnerAreaResult[] = [];
+  for (const area of areaRows) {
+    const strands: LearnerAreaResult["strands"] = [];
+    for (const st of area.strands) {
+      const subRows = st.subStrands.map((s) => {
+        const score = scoreMap.get(s.id) ?? null;
+        return { id: s.id, name: s.name, score, level: computeLevel(score) };
+      });
+      if (subRows.length === 0) continue;
+      const avg = averageScore(subRows.map((r) => r.score));
+      strands.push({
+        strandId: st.id,
+        strandName: st.name,
+        averageScore: avg,
+        level: computeLevel(avg),
+        subStrands: subRows,
+      });
+    }
+    if (strands.length === 0) continue;
+    const all = strands.flatMap((st) => st.subStrands.map((s) => s.score));
+    const avg = averageScore(all);
+    results.push({
+      areaId: area.id,
+      areaName: area.name,
+      areaCode: area.code,
+      averageScore: avg,
+      level: computeLevel(avg),
+      strands,
+    });
+  }
+  return results;
+}
+
+// --- Public API -------------------------------------------------------------
+
+export async function getScoreGrid(
+  term: Term,
+  classId: string,
+  learningAreaId?: string
+): Promise<ScoreGridData> {
+  if (supabaseEnabled()) return sbGetScoreGrid(term, classId, learningAreaId);
   await delay(250);
   const cls = db.classes.find((c) => c.id === classId);
   if (!cls) throw new ApiError(404, "Class not found.");
@@ -62,6 +249,7 @@ export async function getScoreGrid(
 }
 
 export async function saveScores(term: Term, inputs: ScoreInput[]): Promise<void> {
+  if (supabaseEnabled()) return sbSaveScores(term, inputs);
   await delay(180);
   for (const inp of inputs) {
     const bucket = (db.scoreByLearner[inp.learnerId] ??= {});
@@ -115,7 +303,8 @@ export interface LearnerAreaResult {
   }>;
 }
 
-export async function getLearnerAssessment(learnerId: string, _term: Term): Promise<LearnerAreaResult[]> {
+export async function getLearnerAssessment(learnerId: string, term: Term): Promise<LearnerAreaResult[]> {
+  if (supabaseEnabled()) return sbGetLearnerAssessment(learnerId, term);
   await delay(200);
   const learner = db.learners.find((l) => l.id === learnerId);
   if (!learner) throw new ApiError(404, "Learner not found.");
@@ -184,15 +373,18 @@ export interface LearnerSummary extends Pick<Learner, "id" | "upi" | "firstName"
 export async function listClassPerformance(term: Term, classId: string): Promise<LearnerSummary[]> {
   const grid = await getScoreGrid(term, classId);
   const stats = computeGridStats(grid.rows);
+  const learners = supabaseEnabled()
+    ? await supabase!.from("learners").select("id, gender").in("class_id", [classId])
+    : null;
+  const genderById = new Map((learners?.data ?? []).map((l) => [String(l.id), l.gender as "M" | "F"]));
   return grid.rows.map((r) => {
-    const learner = db.learners.find((l) => l.id === r.learner.id);
     const avg = stats.learnerAverages[r.learner.id];
     return {
       id: r.learner.id,
       upi: r.learner.upi,
       firstName: r.learner.firstName,
       lastName: r.learner.lastName,
-      gender: learner?.gender ?? "M",
+      gender: genderById.get(r.learner.id) ?? "M",
       averageScore: avg,
       level: computeLevel(avg),
     };
