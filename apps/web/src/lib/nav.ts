@@ -3,6 +3,7 @@ import {
   BookOpen,
   ClipboardList,
   FileText,
+  History,
   LayoutDashboard,
   School,
   ShieldCheck,
@@ -78,6 +79,13 @@ export const NAV_ITEMS: NavItem[] = [
     label: "Users & Roles",
     icon: ShieldCheck,
     roles: ["SUPER_ADMIN", "COUNTY_ADMIN", "SUB_COUNTY_ADMIN", "SCHOOL_ADMIN"],
+    section: "Administration",
+  },
+  {
+    to: "/logins",
+    label: "Sign-in Log",
+    icon: History,
+    roles: ["SUPER_ADMIN", "COUNTY_ADMIN", "SUB_COUNTY_ADMIN", "SCHOOL_ADMIN", "TEACHER"],
     section: "Administration",
   },
 ];

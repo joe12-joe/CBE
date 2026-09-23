@@ -14,6 +14,7 @@ const Reports = lazy(() => import("@/pages/Reports").then((m) => ({ default: m.R
 const Analytics = lazy(() => import("@/pages/Analytics").then((m) => ({ default: m.AnalyticsPage })));
 const Schools = lazy(() => import("@/pages/Schools").then((m) => ({ default: m.SchoolsPage })));
 const Users = lazy(() => import("@/pages/Users").then((m) => ({ default: m.UsersPage })));
+const LoginHistory = lazy(() => import("@/pages/LoginHistory").then((m) => ({ default: m.LoginHistoryPage })));
 
 function PageLoader() {
   return (
@@ -76,6 +77,7 @@ export const router = createBrowserRouter([
               </RequireRole>
             ),
           },
+          { path: "logins", element: withSuspense(<LoginHistory />) },
           { path: "*", element: withSuspense(<Dashboard />) },
         ],
       },
