@@ -77,7 +77,14 @@ export const router = createBrowserRouter([
               </RequireRole>
             ),
           },
-          { path: "logins", element: withSuspense(<LoginHistory />) },
+          {
+            path: "logins",
+            element: (
+              <RequireRole roles={["SUPER_ADMIN", "COUNTY_ADMIN", "SUB_COUNTY_ADMIN", "SCHOOL_ADMIN"]}>
+                {withSuspense(<LoginHistory />)}
+              </RequireRole>
+            ),
+          },
           { path: "*", element: withSuspense(<Dashboard />) },
         ],
       },

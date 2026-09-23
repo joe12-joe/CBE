@@ -85,7 +85,7 @@ export const NAV_ITEMS: NavItem[] = [
     to: "/logins",
     label: "Sign-in Log",
     icon: History,
-    roles: ["SUPER_ADMIN", "COUNTY_ADMIN", "SUB_COUNTY_ADMIN", "SCHOOL_ADMIN", "TEACHER"],
+    roles: ["SUPER_ADMIN", "COUNTY_ADMIN", "SUB_COUNTY_ADMIN", "SCHOOL_ADMIN"],
     section: "Administration",
   },
 ];

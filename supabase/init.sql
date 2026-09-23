@@ -465,12 +465,17 @@ create policy profile_delete on public.profiles
   for delete to public using (public.app_role() = 'SUPER_ADMIN');
 
 -- Login history: your own sign-ins, plus the sign-ins of users beneath you.
+-- Sign-in log is an oversight feature: admins below SUPER may read the
+-- sign-ins of users beneath them; TEACHER may only ever see its own row.
 drop policy if exists login_event_own on public.login_events;
 create policy login_event_own on public.login_events
   for select to authenticated using (user_id = auth.uid());
 drop policy if exists login_event_scope on public.login_events;
 create policy login_event_scope on public.login_events
-  for select to authenticated using (public.can_view_user(user_id));
+  for select to authenticated using (
+    public.app_role() in ('SUPER_ADMIN','COUNTY_ADMIN','SUB_COUNTY_ADMIN','SCHOOL_ADMIN')
+    and public.can_view_user(user_id)
+  );
 drop policy if exists login_event_write on public.login_events;
 create policy login_event_write on public.login_events
   for insert to authenticated with check (user_id = auth.uid()); -- reserved; trigger normally writes
