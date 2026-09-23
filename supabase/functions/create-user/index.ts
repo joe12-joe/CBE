@@ -43,6 +43,18 @@ const REQUIRED_SCOPE: Record<string, "school" | "sub_county" | "county" | "none"
 const json = (message: string, status: number) =>
   new Response(JSON.stringify({ message }), { status, headers: { "Content-Type": "application/json" } });
 
+/** Find an existing Auth user by email (used to recover an orphaned profile). */
+async function findUserIdByEmail(admin: ReturnType<typeof createClient>, email: string): Promise<string | null> {
+  for (let page = 1; page <= 5; page++) {
+    const { data, error } = await admin.auth.admin.listUsers({ page, perPage: 200 });
+    if (error) return null;
+    const found = (data?.users ?? []).find((u) => u.email?.toLowerCase() === email.toLowerCase());
+    if (found) return found.id;
+    if ((data?.users?.length ?? 0) < 200) break;
+  }
+  return null;
+}
+
 Deno.serve(async (req) => {
   const authHeader = req.headers.get("Authorization") ?? "";
   const token = authHeader.replace(/^Bearer\s+/i, "");
@@ -139,25 +151,38 @@ Deno.serve(async (req) => {
     () => CHARS[Math.floor(Math.random() * CHARS.length)]
   ).join("");
 
+  let createdUser: { id: string } | null = null;
   const { data: created, error: createError } = await admin.auth.admin.createUser({
     email,
     password,
     email_confirm: true,
     user_metadata: { name },
   });
-  if (createError) return json(createError.message, 400);
+  if (createError) {
+    // Email already exists (e.g. a previously orphaned Auth user): recover by
+    // resolving the existing user and upserting/repairing its profile.
+    if (!/already been registered/i.test(createError.message)) {
+      return json(createError.message, 400);
+    }
+    const existingId = await findUserIdByEmail(admin, email);
+    if (!existingId) return json(createError.message, 400);
+    createdUser = { id: existingId };
+  } else {
+    createdUser = created?.user ?? null;
+    if (!createdUser) return json("Auth user was not returned.", 500);
+  }
 
   const { data: profileRow, error: profileError } = await admin
     .from("profiles")
     .upsert(
       {
-        id: created.id,
+        id: createdUser.id,
         name,
         email,
         role,
         school_ids: schoolIdFinal ? [schoolIdFinal] : [],
-        county_ids: countyIdFinal ? [countyIdFinal] : [],
-        sub_county_ids: subCountyIdFinal ? [subCountyIdFinal] : [],
+        county_ids: role === "COUNTY_ADMIN" || role === "SUB_COUNTY_ADMIN" ? (countyIdFinal ? [countyIdFinal] : []) : [],
+        sub_county_ids: role === "SUB_COUNTY_ADMIN" ? (subCountyIdFinal ? [subCountyIdFinal] : []) : [],
         active: true,
       },
       { onConflict: "id" }
