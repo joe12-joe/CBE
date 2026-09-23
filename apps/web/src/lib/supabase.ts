@@ -7,7 +7,7 @@
  * backend. The service layer in `src/services/*` picks the mode per call.
  */
 import { createClient } from "@supabase/supabase-js";
-import type { Learner, LoginEvent, School, SchoolClass, User } from "@/lib/types";
+import type { Learner, School, SchoolClass, User } from "@/lib/types";
 
 export const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string | undefined;
 export const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;
@@ -51,26 +51,6 @@ export function mapProfile(row: ProfileRow): User {
     countyIds: row.county_ids ?? [],
     subCountyIds: row.sub_county_ids ?? [],
     active: row.active,
-  };
-}
-
-export interface LoginEventRow {
-  id: string;
-  user_id: string;
-  email: string;
-  created_at: string;
-  ip?: string;
-  user_agent?: string;
-}
-
-export function mapLoginEvent(row: LoginEventRow): LoginEvent {
-  return {
-    id: String(row.id),
-    userId: String(row.user_id),
-    email: String(row.email),
-    createdAt: String(row.created_at),
-    ip: row.ip ? String(row.ip) : undefined,
-    userAgent: row.user_agent ? String(row.user_agent) : undefined,
   };
 }
 

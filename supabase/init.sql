@@ -4,7 +4,6 @@
 -- This file is idempotent: re-running it clears starter data and recreates it,
 -- leaving rows in public.profiles untouched.
 -- ============================================================================
-
 -- ============================================================================
 -- CBE Manager — Supabase schema (PostgreSQL)
 -- Apply in the Supabase SQL editor (or `supabase db push` / psql).
@@ -63,21 +62,6 @@ create table if not exists public.profiles (
 
 -- For databases created before sub-county scoping existed:
 alter table public.profiles add column if not exists sub_county_ids uuid[] not null default '{}';
-
--- ---------------------------------------------------------------------------
--- Login history: one row per successful sign-in, written automatically by a
--- trigger on auth.users (fires when GoTrue stamps last_sign_in_at).
--- ---------------------------------------------------------------------------
-create table if not exists public.login_events (
-  id         uuid primary key default gen_random_uuid(),
-  user_id    uuid not null references public.profiles(id) on delete cascade,
-  email      text not null,
-  created_at timestamptz not null default now(),
-  ip         text,
-  user_agent text
-);
-
-create index if not exists idx_login_events_user on public.login_events(user_id, created_at desc);
 
 -- ---------------------------------------------------------------------------
 -- Classes & learners
@@ -239,73 +223,6 @@ returns boolean language sql stable security definer set search_path = public as
   )
 $$;
 
--- Can the current user see/manage a given profile? Mirrors the hierarchy:
--- super sees all; every role sees their own; admins see users beneath them,
--- resolved through school → sub-county → county membership (not just the
--- directly stored scope arrays, so e.g. a county admin can see the school
--- admins and teachers of schools inside their county).
-create or replace function public.can_view_user(p_user_id uuid)
-returns boolean language sql stable security definer set search_path = public as $$
-  select
-    public.app_role() = 'SUPER_ADMIN'
-    or p_user_id = auth.uid()
-    or p.school_ids && public.app_school_ids()
-    or (
-      (select count(*) from unnest(public.app_county_ids())) > 0
-      and (
-        p.county_ids && public.app_county_ids()
-        or p.sub_county_ids && (
-          select coalesce(array_agg(sc.id), '{}') from public.sub_counties sc
-          where sc.county_id = any(public.app_county_ids())
-        )
-        or exists (
-          select 1 from public.schools s
-          where s.id = any(p.school_ids)
-            and s.county_id = any(public.app_county_ids())
-        )
-      )
-    )
-    or (
-      (select count(*) from unnest(public.app_sub_county_ids())) > 0
-      and (
-        p.sub_county_ids && public.app_sub_county_ids()
-        or exists (
-          select 1 from public.schools s
-          where s.id = any(p.school_ids)
-            and s.sub_county_id = any(public.app_sub_county_ids())
-        )
-      )
-    )
-  from public.profiles p
-  where p.id = p_user_id
-$$;
-
--- ---------------------------------------------------------------------------
--- Login recording: fired by Supabase Auth whenever a sign-in stamps
--- last_sign_in_at on auth.users.
--- ---------------------------------------------------------------------------
-create or replace function public.record_login()
-returns trigger
-language plpgsql
-security definer
-set search_path = public
-as $$
-begin
-  if new.last_sign_in_at is not null and old.last_sign_in_at is distinct from new.last_sign_in_at then
-    insert into public.login_events (user_id, email)
-    values (new.id, new.email);
-  end if;
-  return new;
-end;
-$$;
-
-drop trigger if exists on_auth_user_login on auth.users;
-create trigger on_auth_user_login
-  after update of last_sign_in_at on auth.users
-  for each row
-  when (old.last_sign_in_at is distinct from new.last_sign_in_at)
-  execute function public.record_login();
-
 -- ---------------------------------------------------------------------------
 -- Indexes
 -- ---------------------------------------------------------------------------
@@ -336,7 +253,6 @@ alter table public.strand_grades       enable row level security;
 alter table public.sub_strands         enable row level security;
 alter table public.scores              enable row level security;
 alter table public.comments            enable row level security;
-alter table public.login_events        enable row level security;
 
 -- Geography & curriculum: any signed-in user may read.
 drop policy if exists geo_read on public.counties;
@@ -435,11 +351,16 @@ create policy enroll_delete on public.enrollments
     exists (select 1 from public.learners l where l.id = learner_id and public.can_access_school(l.school_id))
   );
 
--- Profiles: you may read your own, and admins may list scoped rows (hierarchy
--- resolved via can_view_user, which maps schools → sub-counties → counties).
+-- Profiles: you may read your own, and admins may list scoped rows.
 drop policy if exists profile_self on public.profiles;
 create policy profile_self on public.profiles
-  for select to authenticated using (public.can_view_user(id));
+  for select to authenticated using (
+    id = auth.uid()
+    or public.app_role() = 'SUPER_ADMIN'
+    or (public.app_school_ids() && school_ids)
+    or (public.app_county_ids() && county_ids)
+    or (public.app_sub_county_ids() && sub_county_ids)
+  );
 drop policy if exists profile_write on public.profiles;
 create policy profile_write on public.profiles
   for insert to public with check (public.app_role() = 'SUPER_ADMIN');
@@ -448,32 +369,17 @@ create policy profile_update on public.profiles
   for update to public using (
     public.app_role() = 'SUPER_ADMIN'
     or (public.app_role() in ('COUNTY_ADMIN','SUB_COUNTY_ADMIN')
-        and (public.app_county_ids() && county_ids or public.app_sub_county_ids() && sub_county_ids
-             or exists (select 1 from public.schools s where s.id = any(school_ids)
-                        and (s.county_id = any(public.app_county_ids()) or s.sub_county_id = any(public.app_sub_county_ids())))))
+        and (public.app_county_ids() && county_ids or public.app_sub_county_ids() && sub_county_ids))
     or (public.app_role() = 'SCHOOL_ADMIN' and public.app_school_ids() && school_ids)
   ) with check (
     public.app_role() = 'SUPER_ADMIN'
     or (public.app_role() in ('COUNTY_ADMIN','SUB_COUNTY_ADMIN')
-        and (public.app_county_ids() && county_ids or public.app_sub_county_ids() && sub_county_ids
-             or exists (select 1 from public.schools s where s.id = any(school_ids)
-                        and (s.county_id = any(public.app_county_ids()) or s.sub_county_id = any(public.app_sub_county_ids())))))
+        and (public.app_county_ids() && county_ids or public.app_sub_county_ids() && sub_county_ids))
     or (public.app_role() = 'SCHOOL_ADMIN' and public.app_school_ids() && school_ids)
   );
 drop policy if exists profile_delete on public.profiles;
 create policy profile_delete on public.profiles
   for delete to public using (public.app_role() = 'SUPER_ADMIN');
-
--- Login history: your own sign-ins, plus the sign-ins of users beneath you.
-drop policy if exists login_event_own on public.login_events;
-create policy login_event_own on public.login_events
-  for select to authenticated using (user_id = auth.uid());
-drop policy if exists login_event_scope on public.login_events;
-create policy login_event_scope on public.login_events
-  for select to authenticated using (public.can_view_user(user_id));
-drop policy if exists login_event_write on public.login_events;
-create policy login_event_write on public.login_events
-  for insert to authenticated with check (user_id = auth.uid()); -- reserved; trigger normally writes
 
 -- Scores: read with school access; write school admins (with access) or the learner's teacher.
 drop policy if exists score_read on public.scores;
@@ -534,6 +440,7 @@ create policy comment_delete on public.comments
       and exists (select 1 from public.learners l where l.id = learner_id and public.can_access_school(l.school_id)))
     or (public.app_role() = 'TEACHER' and public.teaches_learner(learner_id))
   );
+
 -- Idempotent re-runs: clear starter data (profiles / user rows are NOT touched).
 truncate table
   public.scores, public.comments, public.enrollments, public.learners, public.classes,

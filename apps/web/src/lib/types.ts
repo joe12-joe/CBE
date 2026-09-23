@@ -68,15 +68,6 @@ export interface User {
   active: boolean;
 }
 
-export interface LoginEvent {
-  id: string;
-  userId: string;
-  email: string;
-  createdAt: string; // ISO timestamp
-  ip?: string;
-  userAgent?: string;
-}
-
 export type Gender = "M" | "F";
 
 export interface Learner {
