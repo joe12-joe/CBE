@@ -25,3 +25,5 @@ Thumbs.db
 # Jest / other test caches
 .vite/
 coverage/
+# Supabase CLI temporary files
+supabase/.temp/
