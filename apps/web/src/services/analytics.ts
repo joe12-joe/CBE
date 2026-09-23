@@ -18,24 +18,17 @@ const STATIC_AVG_PERFORMANCE = 6.8;
 
 // --- Live (Supabase) implementation -----------------------------------------
 
-async function sbGetDashboardStats(schoolId: string, term: Term): Promise<DashboardStats> {
-  const { data: classes, error: cErr } = await supabase!
-    .from("classes")
-    .select("id, grade")
-    .eq("school_id", schoolId)
-    .order("grade");
+async function sbGetDashboardStats(schoolId: string | undefined, term: Term): Promise<DashboardStats> {
+  const classesQ = supabase!.from("classes").select("id, grade").order("grade");
+  const classQuery = schoolId ? classesQ.eq("school_id", schoolId) : classesQ;
+  const { data: classes, error: cErr } = await classQuery;
   if (cErr) throw supabaseError(cErr, "Could not load classes.");
 
-  const { count: schoolLearnerCount } = await supabase!
-    .from("learners")
-    .select("id", { count: "exact", head: true })
-    .eq("school_id", schoolId);
+  const learnersQ = supabase!.from("learners").select("id", { count: "exact", head: true });
+  const { count: schoolLearnerCount } = schoolId ? await learnersQ.eq("school_id", schoolId) : await learnersQ;
 
-  const { data: classed, error: clErr } = await supabase!
-    .from("learners")
-    .select("class_id")
-    .eq("school_id", schoolId)
-    .not("class_id", "is", null);
+  const classedQ = supabase!.from("learners").select("class_id").not("class_id", "is", null);
+  const { data: classed, error: clErr } = schoolId ? await classedQ.eq("school_id", schoolId) : await classedQ;
   if (clErr) throw supabaseError(clErr, "Could not load learners.");
 
   const gradeById = new Map((classes ?? []).map((c) => [String(c.id), String(c.grade)]));
@@ -192,11 +185,11 @@ async function sbGetCountyComparison(countyId: string, term: Term): Promise<Coun
 
 // --- Public API -------------------------------------------------------------
 
-export async function getDashboardStats(schoolId: string, term: Term): Promise<DashboardStats> {
+export async function getDashboardStats(schoolId: string | undefined, term: Term): Promise<DashboardStats> {
   if (supabaseEnabled()) return sbGetDashboardStats(schoolId, term);
   await delay(400);
-  const schoolLearners = db.learners.filter((l) => l.schoolId === schoolId);
-  const classes = db.classes.filter((c) => c.schoolId === schoolId);
+  const schoolLearners = schoolId ? db.learners.filter((l) => l.schoolId === schoolId) : db.learners;
+  const classes = schoolId ? db.classes.filter((c) => c.schoolId === schoolId) : db.classes;
   const grades = new Set(classes.map((c) => c.grade));
 
   const enrollmentByGrade: EnrollmentByGrade[] = GRADE_ORDER.filter((g) => grades.has(g)).map((grade) => ({

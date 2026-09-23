@@ -37,6 +37,7 @@ export interface ProfileRow {
   role: User["role"];
   school_ids: string[];
   county_ids: string[];
+  sub_county_ids: string[];
   active: boolean;
 }
 
@@ -48,6 +49,7 @@ export function mapProfile(row: ProfileRow): User {
     role: row.role,
     schoolIds: row.school_ids ?? [],
     countyIds: row.county_ids ?? [],
+    subCountyIds: row.sub_county_ids ?? [],
     active: row.active,
   };
 }

@@ -64,6 +64,7 @@ export interface User {
   role: Role;
   schoolIds: string[];
   countyIds: string[];
+  subCountyIds: string[];
   active: boolean;
 }
 

@@ -1,9 +1,10 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Loader2, Plus, ShieldCheck, UserCheck, UserX } from "lucide-react";
 import { toast } from "sonner";
 import { listUsers, createUser, setUserActive } from "@/services/auth";
-import { listSchools } from "@/services/schools";
+import { getSchoolsForUser, listCounties, listSubCounties } from "@/services/schools";
+import { rolesUserMayCreate, ROLE_SCOPE } from "@/lib/rbac";
 import { ROLE_LABEL } from "@/stores/authStore";
 import { useAuthStore } from "@/stores/authStore";
 import { userSchema, type UserFormValues } from "@/lib/schemas";
@@ -42,22 +43,25 @@ import { FormField, FormGrid } from "@/components/ui/form-field";
 import { Input } from "@/components/ui/input";
 import type { Role } from "@/lib/types";
 
-const ROLES: Role[] = ["SUPER_ADMIN", "COUNTY_ADMIN", "SUB_COUNTY_ADMIN", "SCHOOL_ADMIN", "TEACHER"];
-
 export function UsersPage() {
   const me = useAuthStore((s) => s.user)!;
   const qc = useQueryClient();
   const [open, setOpen] = useState(false);
+
+  const creatable = rolesUserMayCreate(me.role);
 
   const { data: users = [], isLoading } = useQuery({
     queryKey: ["users"],
     queryFn: () => listUsers(),
   });
 
-  const { data: schools = [] } = useQuery({
-    queryKey: ["schools", "all"],
-    queryFn: () => listSchools(),
+  const { data: mySchools = [] } = useQuery({
+    queryKey: ["schools", "for-user", me.id],
+    queryFn: () => getSchoolsForUser(me),
+    enabled: !!me,
   });
+  const { data: counties = [] } = useQuery({ queryKey: ["counties"], queryFn: listCounties });
+  const { data: subCounties = [] } = useQuery({ queryKey: ["sub-counties"], queryFn: () => listSubCounties() });
 
   const toggleActive = useMutation({
     mutationFn: ({ id, active }: { id: string; active: boolean }) => setUserActive(id, active),
@@ -68,20 +72,38 @@ export function UsersPage() {
     onError: (err) => toast.error(err instanceof Error ? err.message : "Update failed"),
   });
 
+  const scopeLabel = (u: { role: Role; schoolIds: string[]; countyIds: string[]; subCountyIds: string[] }) => {
+    if (u.role === "SUPER_ADMIN") return "National";
+    const school = mySchools.find((s) => s.id === u.schoolIds[0]);
+    if (school) return school.name;
+    const sub = subCounties.find((s) => s.id === u.subCountyIds[0]);
+    if (sub) return sub.name;
+    const county = counties.find((c) => c.id === u.countyIds[0]);
+    if (county) return county.name;
+    return "—";
+  };
+
   return (
     <div>
       <PageHeader
         title="Users & Roles"
-        description="Manage system accounts and their access levels."
+        description={`You can manage: ${creatable.map((r) => ROLE_LABEL[r]).join(", ")}`}
         actions={
-          <Dialog open={open} onOpenChange={setOpen}>
-            <DialogTrigger asChild>
-              <Button>
-                <Plus /> Add user
-              </Button>
-            </DialogTrigger>
-            <AddUserDialog schools={schools} onDone={() => setOpen(false)} />
-          </Dialog>
+          creatable.length > 0 ? (
+            <Dialog open={open} onOpenChange={setOpen}>
+              <DialogTrigger asChild>
+                <Button>
+                  <Plus /> Add user
+                </Button>
+              </DialogTrigger>
+              <AddUserDialog
+                mySchools={mySchools}
+                counties={counties}
+                subCounties={subCounties}
+                onDone={() => setOpen(false)}
+              />
+            </Dialog>
+          ) : undefined
         }
       />
 
@@ -101,6 +123,7 @@ export function UsersPage() {
                 <TableHead>Name</TableHead>
                 <TableHead>Email</TableHead>
                 <TableHead>Role</TableHead>
+                <TableHead>Scope</TableHead>
                 <TableHead>Status</TableHead>
                 <TableHead className="w-32 text-right">Action</TableHead>
               </TableRow>
@@ -119,6 +142,7 @@ export function UsersPage() {
                       {ROLE_LABEL[u.role]}
                     </Badge>
                   </TableCell>
+                  <TableCell className="text-xs text-muted-foreground">{scopeLabel(u)}</TableCell>
                   <TableCell>
                     {u.active ? (
                       <Badge variant="outline" className="gap-1.5 text-success">
@@ -151,15 +175,34 @@ export function UsersPage() {
 }
 
 function AddUserDialog({
-  schools,
+  mySchools,
+  counties,
+  subCounties,
   onDone,
 }: {
-  schools: Awaited<ReturnType<typeof listSchools>>;
+  mySchools: Awaited<ReturnType<typeof getSchoolsForUser>>;
+  counties: Awaited<ReturnType<typeof listCounties>>;
+  subCounties: Awaited<ReturnType<typeof listSubCounties>>;
   onDone: () => void;
 }) {
   const qc = useQueryClient();
   const currentUser = useAuthStore((s) => s.user)!;
-  const [schoolId, setSchoolId] = useState<string>(currentUser.schoolIds[0] ?? schools[0]?.id ?? "");
+  const creatable = rolesUserMayCreate(currentUser.role);
+
+  // Schools the caller can actually scope a new user to (their own scope).
+  const scopedSchools = mySchools.filter(
+    (s) =>
+      currentUser.role === "SUPER_ADMIN" ||
+      currentUser.schoolIds.includes(s.id) ||
+      currentUser.countyIds.includes(s.countyId) ||
+      currentUser.subCountyIds.includes(s.subCountyId)
+  );
+
+  const [schoolId, setSchoolId] = useState("");
+  const [subCountyId, setSubCountyId] = useState("");
+  const [countyId, setCountyId] = useState("");
+
+  const defaultRole: Role = creatable.includes("TEACHER") ? "TEACHER" : creatable[0];
 
   const {
     register,
@@ -170,18 +213,37 @@ function AddUserDialog({
     formState: { errors },
   } = useForm<UserFormValues>({
     resolver: zodResolver(userSchema),
-    defaultValues: { role: "TEACHER" },
+    defaultValues: { role: defaultRole },
   });
 
   const role = watch("role");
+  const scope = ROLE_SCOPE[role];
+
+  useEffect(() => {
+    if (!schoolId && scopedSchools[0]) setSchoolId(scopedSchools[0].id);
+  }, [scopedSchools, schoolId]);
+  useEffect(() => {
+    if (!subCountyId && subCounties[0]) setSubCountyId(subCounties[0].id);
+  }, [subCounties, subCountyId]);
+  useEffect(() => {
+    if (!countyId && counties[0]) setCountyId(counties[0].id);
+  }, [counties, countyId]);
 
   const mutation = useMutation({
     mutationFn: (values: UserFormValues) =>
-      createUser({ ...values, schoolId, countyId: currentUser.countyIds[0] ?? "" }),
+      createUser({
+        ...values,
+        schoolId: scope === "school" ? (schoolId || scopedSchools[0]?.id) : undefined,
+        subCountyId: scope === "sub_county" ? (subCountyId || subCounties[0]?.id) : undefined,
+        countyId: scope === "county" ? (countyId || counties[0]?.id) : undefined,
+      }),
     onSuccess: () => {
-      toast.success("User added");
+      toast.success("User added — share the generated password.");
       qc.invalidateQueries({ queryKey: ["users"] });
       reset();
+      setSchoolId("");
+      setSubCountyId("");
+      setCountyId("");
       onDone();
     },
     onError: (err) => toast.error(err instanceof Error ? err.message : "Could not add user"),
@@ -207,7 +269,7 @@ function AddUserDialog({
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              {ROLES.map((r) => (
+              {creatable.map((r) => (
                 <SelectItem key={r} value={r}>
                   {ROLE_LABEL[r]}
                 </SelectItem>
@@ -215,20 +277,58 @@ function AddUserDialog({
             </SelectContent>
           </Select>
         </FormField>
-        <FormField label="School" hint="Used as the default school scope for this account.">
-          <Select value={schoolId} onValueChange={setSchoolId}>
-            <SelectTrigger>
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {schools.map((s) => (
-                <SelectItem key={s.id} value={s.id}>
-                  {s.name}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </FormField>
+
+        {scope === "school" && (
+          <FormField
+            label="School"
+            hint={scopedSchools.length === 0 ? "No schools in your scope." : "The school this account is scoped to."}
+          >
+            <Select value={schoolId} onValueChange={setSchoolId}>
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {scopedSchools.map((s) => (
+                  <SelectItem key={s.id} value={s.id}>
+                    {s.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </FormField>
+        )}
+        {scope === "sub_county" && (
+          <FormField label="Sub-county" hint="The sub-county this account is scoped to.">
+            <Select value={subCountyId} onValueChange={setSubCountyId}>
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {subCounties.map((s) => (
+                  <SelectItem key={s.id} value={s.id}>
+                    {s.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </FormField>
+        )}
+        {scope === "county" && (
+          <FormField label="County" hint="The county this account is scoped to.">
+            <Select value={countyId} onValueChange={setCountyId}>
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {counties.map((c) => (
+                  <SelectItem key={c.id} value={c.id}>
+                    {c.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </FormField>
+        )}
       </form>
       <DialogFooter>
         <Button type="button" variant="outline" onClick={onDone}>

@@ -71,8 +71,9 @@ async function sbCreateUser(input: {
   name: string;
   email: string;
   role: User["role"];
-  schoolId: string;
-  countyId: string;
+  schoolId?: string;
+  countyId?: string;
+  subCountyId?: string;
 }): Promise<User> {
   const { data } = await supabase!.auth.getSession();
   const token = data.session?.access_token;
@@ -89,6 +90,7 @@ async function sbCreateUser(input: {
       role: input.role,
       schoolId: input.schoolId,
       countyId: input.countyId,
+      subCountyId: input.subCountyId,
     }),
   });
   let json: { message?: string; user?: User } = {};
@@ -155,8 +157,9 @@ export async function createUser(input: {
   name: string;
   email: string;
   role: User["role"];
-  schoolId: string;
-  countyId: string;
+  schoolId?: string;
+  countyId?: string;
+  subCountyId?: string;
 }): Promise<User> {
   if (supabaseEnabled()) return sbCreateUser(input);
   await delay();
@@ -168,8 +171,9 @@ export async function createUser(input: {
     name: input.name,
     email: input.email,
     role: input.role,
-    schoolIds: [input.schoolId],
-    countyIds: [input.countyId],
+    schoolIds: input.schoolId ? [input.schoolId] : [],
+    countyIds: input.countyId ? [input.countyId] : [],
+    subCountyIds: input.subCountyId ? [input.subCountyId] : [],
     active: true,
   };
   users.push(user);

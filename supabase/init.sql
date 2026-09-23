@@ -53,11 +53,15 @@ create table if not exists public.profiles (
   email      text not null unique,
   role       text not null default 'TEACHER'
              check (role in ('SUPER_ADMIN','COUNTY_ADMIN','SUB_COUNTY_ADMIN','SCHOOL_ADMIN','TEACHER')),
-  school_ids uuid[] not null default '{}',
-  county_ids uuid[] not null default '{}',
-  active     boolean not null default true,
-  created_at timestamptz not null default now()
+  school_ids    uuid[] not null default '{}',
+  county_ids    uuid[] not null default '{}',
+  sub_county_ids uuid[] not null default '{}',
+  active        boolean not null default true,
+  created_at    timestamptz not null default now()
 );
+
+-- For databases created before sub-county scoping existed:
+alter table public.profiles add column if not exists sub_county_ids uuid[] not null default '{}';
 
 -- ---------------------------------------------------------------------------
 -- Classes & learners
@@ -175,6 +179,11 @@ returns uuid[] language sql stable security definer set search_path = public as 
   select coalesce((select county_ids from public.profiles where id = auth.uid()), '{}')
 $$;
 
+create or replace function public.app_sub_county_ids()
+returns uuid[] language sql stable security definer set search_path = public as $$
+  select coalesce((select sub_county_ids from public.profiles where id = auth.uid()), '{}')
+$$;
+
 -- Can the current user access a given school?
 create or replace function public.can_access_school(p_school_id uuid)
 returns boolean language sql stable security definer set search_path = public as $$
@@ -183,7 +192,23 @@ returns boolean language sql stable security definer set search_path = public as
     or p_school_id = any(public.app_school_ids())
     or exists (
       select 1 from public.schools s
-      where s.id = p_school_id and s.county_id = any(public.app_county_ids())
+      where s.id = p_school_id
+        and (
+          s.county_id = any(public.app_county_ids())
+          or s.sub_county_id = any(public.app_sub_county_ids())
+        )
+    )
+$$;
+
+-- Read scope for a learner: admins/oversight roles use school access; teachers
+-- are limited to learners in the classes they teach (not the whole school).
+create or replace function public.can_read_learner(p_learner_id uuid)
+returns boolean language sql stable security definer set search_path = public as $$
+  select
+    public.app_role() = 'SUPER_ADMIN'
+    or (
+      public.can_access_school((select l.school_id from public.learners l where l.id = p_learner_id))
+      and (public.app_role() <> 'TEACHER' or public.teaches_learner(p_learner_id))
     )
 $$;
 
@@ -272,7 +297,10 @@ create policy school_write on public.schools for all to public using (public.app
 -- Classes: read if you can access the school; write roles are super/school admin (with access).
 drop policy if exists class_read on public.classes;
 create policy class_read on public.classes
-  for select to authenticated using (public.can_access_school(school_id));
+  for select to authenticated using (
+    public.can_access_school(school_id)
+    and (public.app_role() <> 'TEACHER' or teacher_id = auth.uid())
+  );
 drop policy if exists class_write on public.classes;
 create policy class_write on public.classes
   for all to public
@@ -282,7 +310,7 @@ create policy class_write on public.classes
 -- Learners: read if you can access the school; write school admins/super admin.
 drop policy if exists learner_read on public.learners;
 create policy learner_read on public.learners
-  for select to authenticated using (public.can_access_school(school_id));
+  for select to authenticated using (public.can_read_learner(id));
 drop policy if exists learner_write on public.learners;
 create policy learner_write on public.learners
   for insert to authenticated with check (
@@ -290,8 +318,12 @@ create policy learner_write on public.learners
   );
 drop policy if exists learner_update on public.learners;
 create policy learner_update on public.learners
-  for update to authenticated using (public.can_access_school(school_id))
-  with check (public.can_access_school(school_id));
+  for update to authenticated using (
+    public.app_role() in ('SUPER_ADMIN','SCHOOL_ADMIN') and public.can_access_school(school_id)
+  )
+  with check (
+    public.app_role() in ('SUPER_ADMIN','SCHOOL_ADMIN') and public.can_access_school(school_id)
+  );
 drop policy if exists learner_delete on public.learners;
 create policy learner_delete on public.learners
   for delete to authenticated using (public.app_role() in ('SUPER_ADMIN','SCHOOL_ADMIN') and public.can_access_school(school_id));
@@ -299,9 +331,7 @@ create policy learner_delete on public.learners
 -- Enrollments: tied to the learner's school.
 drop policy if exists enroll_read on public.enrollments;
 create policy enroll_read on public.enrollments
-  for select to authenticated using (
-    exists (select 1 from public.learners l where l.id = learner_id and public.can_access_school(l.school_id))
-  );
+  for select to authenticated using (public.can_read_learner(learner_id));
 drop policy if exists enroll_insert on public.enrollments;
 create policy enroll_insert on public.enrollments
   for insert to authenticated with check (
@@ -329,17 +359,32 @@ create policy profile_self on public.profiles
     or public.app_role() = 'SUPER_ADMIN'
     or (public.app_school_ids() && school_ids)
     or (public.app_county_ids() && county_ids)
+    or (public.app_sub_county_ids() && sub_county_ids)
   );
 drop policy if exists profile_write on public.profiles;
 create policy profile_write on public.profiles
-  for all to public using (public.app_role() = 'SUPER_ADMIN') with check (public.app_role() = 'SUPER_ADMIN');
+  for insert to public with check (public.app_role() = 'SUPER_ADMIN');
+drop policy if exists profile_update on public.profiles;
+create policy profile_update on public.profiles
+  for update to public using (
+    public.app_role() = 'SUPER_ADMIN'
+    or (public.app_role() in ('COUNTY_ADMIN','SUB_COUNTY_ADMIN')
+        and (public.app_county_ids() && county_ids or public.app_sub_county_ids() && sub_county_ids))
+    or (public.app_role() = 'SCHOOL_ADMIN' and public.app_school_ids() && school_ids)
+  ) with check (
+    public.app_role() = 'SUPER_ADMIN'
+    or (public.app_role() in ('COUNTY_ADMIN','SUB_COUNTY_ADMIN')
+        and (public.app_county_ids() && county_ids or public.app_sub_county_ids() && sub_county_ids))
+    or (public.app_role() = 'SCHOOL_ADMIN' and public.app_school_ids() && school_ids)
+  );
+drop policy if exists profile_delete on public.profiles;
+create policy profile_delete on public.profiles
+  for delete to public using (public.app_role() = 'SUPER_ADMIN');
 
 -- Scores: read with school access; write school admins (with access) or the learner's teacher.
 drop policy if exists score_read on public.scores;
 create policy score_read on public.scores
-  for select to authenticated using (
-    exists (select 1 from public.learners l where l.id = learner_id and public.can_access_school(l.school_id))
-  );
+  for select to authenticated using (public.can_read_learner(learner_id));
 drop policy if exists score_write on public.scores;
 create policy score_write on public.scores
   for insert to authenticated with check (
@@ -369,9 +414,7 @@ create policy score_delete on public.scores
 -- Comments: same scoping as scores.
 drop policy if exists comment_read on public.comments;
 create policy comment_read on public.comments
-  for select to authenticated using (
-    exists (select 1 from public.learners l where l.id = learner_id and public.can_access_school(l.school_id))
-  );
+  for select to authenticated using (public.can_read_learner(learner_id));
 drop policy if exists comment_write on public.comments;
 create policy comment_write on public.comments
   for insert to authenticated with check (
