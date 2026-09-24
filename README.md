@@ -93,10 +93,35 @@ admins see scope-wide stats.
 
 ## Deployment
 
-Containerised static hosting (SPA fallback included). The browser talks to Supabase directly,
-so no API proxy is required:
+The frontend and backend are hosted separately. The backend is a live Supabase project
+(Auth + PostgREST + the `create-user` edge function — see `supabase/README.md`); the
+frontend is a static SPA that talks to Supabase directly, so no API proxy is required.
+
+Set two environment variables at build time:
+
+| Variable | Value |
+|---|---|
+| `VITE_SUPABASE_URL` | your Supabase project URL (`https://<ref>.supabase.co`) |
+| `VITE_SUPABASE_ANON_KEY` | your project's public **anon** key |
+
+The anon key is safe to ship: it only grants RLS-scoped access. Never ship the service-role key.
+
+### Netlify (recommended)
+
+The repo ships with `netlify.toml` (build: `npm run build` in `apps/web`, publish `dist`,
+SPA fallback included).
+
+1. Push this repo to GitHub.
+2. Netlify → **Add new site → Import an existing project → GitHub** and pick `CBE`.
+3. Netlify reads `netlify.toml` automatically (base dir `apps/web`, publish `dist`).
+4. Add the two `VITE_SUPABASE_*` variables above under **Site configuration → Environment variables**.
+5. **Deploy** — every push to `main` now auto-deploys.
+
+### Container (own server / VPS)
 
 ```bash
 docker build -t cbe-web apps/web
 docker run -p 8080:80 cbe-web
 ```
+
+`nginx.conf` already provides the SPA fallback and asset caching.
