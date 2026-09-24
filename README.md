@@ -106,15 +106,15 @@ Set two environment variables at build time:
 
 The anon key is safe to ship: it only grants RLS-scoped access. Never ship the service-role key.
 
-### Netlify (recommended)
+### Vercel (recommended)
 
-The repo ships with `netlify.toml` (build: `npm run build` in `apps/web`, publish `dist`,
-SPA fallback included).
+The repo ships with `apps/web/vercel.json` (framework `vite`, build `npm run build`,
+publish `dist`, SPA rewrites + asset caching included).
 
 1. Push this repo to GitHub.
-2. Netlify → **Add new site → Import an existing project → GitHub** and pick `CBE`.
-3. Netlify reads `netlify.toml` automatically (base dir `apps/web`, publish `dist`).
-4. Add the two `VITE_SUPABASE_*` variables above under **Site configuration → Environment variables**.
+2. Vercel → **Add New… → Project** → import the `CBE` repo.
+3. Set **Root Directory** to `apps/web` (Vercel then reads `vercel.json` from there).
+4. Add the two `VITE_SUPABASE_*` variables above under **Settings → Environment Variables**.
 5. **Deploy** — every push to `main` now auto-deploys.
 
 ### Container (own server / VPS)
