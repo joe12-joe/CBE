@@ -40,8 +40,20 @@ const REQUIRED_SCOPE: Record<string, "school" | "sub_county" | "county" | "none"
   TEACHER: "school",
 };
 
+// CORS: the dashboard/studio gateways already allow any origin for PostgREST
+// and GoTrue, but edge functions must declare it themselves so the browser
+// preflight succeeds when the app is hosted on a separate domain.
+const cors = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Headers": "authorization, apikey, x-client-info, content-type",
+  "Access-Control-Allow-Methods": "POST, GET, OPTIONS",
+};
+
 const json = (message: string, status: number) =>
-  new Response(JSON.stringify({ message }), { status, headers: { "Content-Type": "application/json" } });
+  new Response(JSON.stringify({ message }), {
+    status,
+    headers: { "Content-Type": "application/json", ...cors },
+  });
 
 /** Find an existing Auth user by email (used to recover an orphaned profile). */
 async function findUserIdByEmail(admin: ReturnType<typeof createClient>, email: string): Promise<string | null> {
@@ -56,6 +68,12 @@ async function findUserIdByEmail(admin: ReturnType<typeof createClient>, email: 
 }
 
 Deno.serve(async (req) => {
+  // Answer browser preflights directly so cross-origin hosting works.
+  // A 204 is a "null body" status — passing a body string would throw.
+  if (req.method === "OPTIONS") {
+    return new Response(null, { status: 204, headers: cors });
+  }
+
   const authHeader = req.headers.get("Authorization") ?? "";
   const token = authHeader.replace(/^Bearer\s+/i, "");
   if (!token) return json("Missing bearer token.", 401);
@@ -206,6 +224,6 @@ Deno.serve(async (req) => {
       },
       initialPassword: password,
     }),
-    { status: 201, headers: { "Content-Type": "application/json" } }
+    { status: 201, headers: { "Content-Type": "application/json", ...cors } }
   );
 });
